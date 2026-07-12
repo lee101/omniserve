@@ -1,0 +1,35 @@
+[project]
+name = "omniserve"
+version = "0.1.0"
+description = "Omni model server: auto-loading, VRAM-balancing inference for diffusion, video, LoRA and LLM models on one GPU fleet"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "app.nz" }]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "safetensors>=0.4",
+    "huggingface_hub>=0.24",
+]
+
+[project.optional-dependencies]
+diffusion = ["torch>=2.4", "diffusers>=0.31", "transformers>=4.44", "accelerate>=0.33", "torchao>=0.5", "pillow", "numpy"]
+llm = ["vllm>=0.6"]
+video = ["av", "pillow", "numpy"]
+dev = ["pytest>=8", "pytest-asyncio", "ruff"]
+
+[project.scripts]
+omniserve = "omniserve.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["omniserve"]
+
+[tool.ruff]
+line-length = 120
