@@ -30,11 +30,11 @@ PROBES = {
 }
 
 
-def _post(base, path, body, timeout):
+def _post(base, path, body, timeout, extra_headers=None):
     data = json.dumps(body).encode()
-    req = urllib.request.Request(base + path, data=data,
-                                 headers={"content-type": "application/json",
-                                          "x-omniserve-tier": "background"})
+    headers = {"content-type": "application/json", "x-omniserve-tier": "background"}
+    headers.update(extra_headers or {})
+    req = urllib.request.Request(base + path, data=data, headers=headers)
     t0 = time.monotonic()
     with urllib.request.urlopen(req, timeout=timeout) as r:
         r.read()
@@ -58,7 +58,15 @@ def main():
     ap.add_argument("--baseline", default="")
     ap.add_argument("--probes", default="chat,tts,image")
     ap.add_argument("--timeout", type=float, default=120)
+    ap.add_argument("--probe-header", action="append", default=[],
+                    help="extra header for probe requests, 'Name: value' (repeatable), "
+                         "e.g. --probe-header 'X-Rapid-API-Key: <key>'")
     args = ap.parse_args()
+    extra_headers = {}
+    for h in args.probe_header:
+        if ":" in h:
+            k, v = h.split(":", 1)
+            extra_headers[k.strip()] = v.strip()
 
     baseline = {}
     if args.baseline:
@@ -80,7 +88,7 @@ def main():
         for p in which:
             path, body = PROBES[p]
             try:
-                ms = _post(args.base, path, body, args.timeout)
+                ms = _post(args.base, path, body, args.timeout, extra_headers)
                 consecutive_fail[p] = 0
                 tag = f"{p}={ms:.0f}ms"
                 b = baseline.get(f"{p}_ms_p99")

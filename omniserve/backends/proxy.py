@@ -71,7 +71,8 @@ class ProxyBackend(Backend):
 
     def infer(self, request: dict) -> dict:
         path, payload = self._payload(request)
-        r = self._client.post(path, json=payload)
+        headers = request.get("_headers") or {}
+        r = self._client.post(path, json=payload, headers=headers)
         r.raise_for_status()
         ct = r.headers.get("content-type", "")
         if ct.startswith("application/json"):

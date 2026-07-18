@@ -20,6 +20,15 @@ def _tier(request: Request) -> Tier:
     # caller's billing state). Absent header = FREE.
     return Tier.parse(request.headers.get("x-omniserve-tier"))
 
+
+# Auth/identity headers forwarded to proxied upstreams (they do their own auth).
+_FORWARD_HEADERS = ("authorization", "x-api-key", "x-rapid-api-key", "secret",
+                    "anthropic-version", "openai-organization")
+
+
+def _fwd_headers(request: Request) -> dict:
+    return {k: v for k, v in request.headers.items() if k.lower() in _FORWARD_HEADERS}
+
 log = logging.getLogger("omniserve")
 
 
@@ -183,6 +192,7 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         body = await request.json()
         key = _resolve(body.get("model"), "tts")
         body["_path"] = "/v1/audio/speech"
+        body["_headers"] = _fwd_headers(request)
         result = _run(sched, key, body, _tier(request))
         raw = result.get("_raw")
         if raw is not None:
