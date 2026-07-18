@@ -178,6 +178,35 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
             return Response(base64.b64decode(result["video_b64"]), media_type="video/mp4")
         return {"created": int(time.time()), "data": [{"b64_json": result["video_b64"], "format": "mp4"}], "model": key}
 
+    @app.post("/v1/audio/speech")
+    async def audio_speech(request: Request):
+        body = await request.json()
+        key = _resolve(body.get("model"), "tts")
+        body["_path"] = "/v1/audio/speech"
+        result = _run(sched, key, body, _tier(request))
+        raw = result.get("_raw")
+        if raw is not None:
+            return Response(raw, media_type=result.get("_content_type", "audio/wav"))
+        # json result with base64 audio (fallback shape)
+        return result
+
+    @app.post("/v1/audio/transcriptions")
+    async def audio_transcriptions(request: Request):
+        # multipart (file upload) OR json {audio_url}. Proxy passes the body
+        # through to the STT upstream; tier from header.
+        key = _resolve(request.query_params.get("model"), "stt")
+        ctype = request.headers.get("content-type", "")
+        if ctype.startswith("application/json"):
+            body = await request.json()
+        else:
+            body = {"_raw_body": await request.body(), "_content_type": ctype}
+        body["_path"] = "/v1/audio/transcriptions"
+        result = _run(sched, key, body, _tier(request))
+        raw = result.get("_raw")
+        if raw is not None:
+            return Response(raw, media_type=result.get("_content_type", "application/json"))
+        return result
+
     @app.exception_handler(CapacityError)
     def capacity_handler(_req, exc):
         return JSONResponse(status_code=507, content={"error": str(exc)})

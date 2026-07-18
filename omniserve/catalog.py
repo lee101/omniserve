@@ -94,10 +94,35 @@ def load_extra_catalog(path: str | Path) -> int:
     return n
 
 
+def register_proxy_defaults() -> None:
+    """Register proxy catalog entries for each modality that has an upstream
+    configured via OMNISERVE_PROXY_<KEY>. Lets one omniserve front an existing
+    fleet (image/LLM/TTS/STT) without re-hosting any model. Only entries whose
+    base_url env is set are registered, so this is a no-op on a fresh box."""
+    proxies = [
+        ("proxy-llm", "llm", "chat"),
+        ("proxy-image", "diffusion", "text-to-image"),
+        ("proxy-tts", "tts", "text-to-speech"),
+        ("proxy-stt", "stt", "speech-to-text"),
+    ]
+    for key, family, task in proxies:
+        env_key = "OMNISERVE_PROXY_" + key.upper().replace("-", "_")
+        base = os.environ.get(env_key)
+        if not base:
+            continue
+        register(ModelSpec(
+            key=key, family=family, repo_id=key, engine="proxy", task=task,
+            resident_gib=0.0,
+            extra={"base_url": base,
+                   "model_override": os.environ.get(env_key + "_MODEL", "")},
+        ))
+
+
 def init_catalog_from_env() -> None:
     extra = os.environ.get("OMNISERVE_CATALOG")
     if extra and Path(extra).exists():
         load_extra_catalog(extra)
+    register_proxy_defaults()
 
 
 def get_model(key: str) -> ModelSpec:

@@ -1,6 +1,6 @@
 from .base import ENGINES, Backend, State, make_backend, register_engine
 
-for _mod in ("diffusion", "vllm_llm", "ltx_video"):
+for _mod in ("proxy", "diffusion", "vllm_llm", "ltx_video"):
     try:
         __import__(f"{__name__}.{_mod}")
     except ImportError:
