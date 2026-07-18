@@ -7,9 +7,9 @@ No cutover happens until, per model, BOTH hold:
 
 Usage:
   python eval_parity.py images --candidate http://localhost:8000 \
-      --reference http://127.0.0.1:8100 --model z-image-turbo --out runs/parity
+      --reference http://127.0.0.1:9100 --model z-image-turbo --out runs/parity
   python eval_parity.py llm --candidate http://localhost:8000 \
-      --reference http://127.0.0.1:8300 --model gemma-roleplay-v2 \
+      --reference http://127.0.0.1:9000 --model my-llm \
       --judge-base https://openpaths.io/v1 --judge-key $OPENPATHS_KEY
 
 Fixed seeds + fixed prompts make image comparisons deterministic where the
