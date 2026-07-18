@@ -47,3 +47,14 @@ def test_weights_incomplete_not_hit(tmp_path, monkeypatch):
 def test_weights_dir_env(tmp_path, monkeypatch):
     monkeypatch.setenv("WEIGHTS_DIR", str(tmp_path))
     assert weights_dir() == tmp_path
+
+
+def test_weights_no_hf_fallback_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEIGHTS_DIR", str(tmp_path))
+    monkeypatch.setenv("OMNISERVE_MODELS_BASE", "")
+    try:
+        resolve_weights("org/never-cached", allow_hf=False)
+        raised = False
+    except FileNotFoundError:
+        raised = True
+    assert raised

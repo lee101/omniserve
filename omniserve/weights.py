@@ -66,7 +66,7 @@ def _mirror_fetch(repo_id: str, dest: Path, mirror: str) -> bool:
     return True
 
 
-def resolve_weights(repo_id: str, single_file: str = "", allow_download: bool = True) -> Path:
+def resolve_weights(repo_id: str, single_file: str = "", allow_download: bool = True, allow_hf: bool = True) -> Path:
     base = weights_dir()
     local = base / repo_id
     marker = local / ".incomplete"
@@ -82,19 +82,26 @@ def resolve_weights(repo_id: str, single_file: str = "", allow_download: bool = 
 
     local.mkdir(parents=True, exist_ok=True)
     marker.touch()
-    try:
-        mirror = os.environ.get("OMNISERVE_MODELS_BASE", DEFAULT_MIRROR)
-        if mirror and _mirror_fetch(repo_id, local, mirror):
-            marker.unlink(missing_ok=True)
-            return local / single_file if single_file else local
-
-        from huggingface_hub import hf_hub_download, snapshot_download
-        token = os.environ.get("HF_TOKEN")
-        if single_file:
-            hf_hub_download(repo_id, single_file, local_dir=local, token=token)
-        else:
-            snapshot_download(repo_id, local_dir=local, token=token)
+    mirror = os.environ.get("OMNISERVE_MODELS_BASE", DEFAULT_MIRROR)
+    if mirror and _mirror_fetch(repo_id, local, mirror):
         marker.unlink(missing_ok=True)
         return local / single_file if single_file else local
-    except Exception:
-        raise
+    if not allow_hf:
+        raise FileNotFoundError(f"{repo_id} not on mirror; caller handles HF")
+
+    from huggingface_hub import hf_hub_download, snapshot_download
+    token = os.environ.get("HF_TOKEN")
+    if single_file:
+        hf_hub_download(repo_id, single_file, local_dir=local, token=token)
+    else:
+        snapshot_download(repo_id, local_dir=local, token=token,
+                          ignore_patterns=["*.onnx", "*.onnx_data", "*openvino*", "*.msgpack",
+                                           "*.pb", "*.bin", "*.md", "*.git*"])
+    marker.unlink(missing_ok=True)
+    return local / single_file if single_file else local
+
+
+def hf_cache_dir() -> Path:
+    d = weights_dir() / "hf-cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

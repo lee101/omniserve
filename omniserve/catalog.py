@@ -53,7 +53,7 @@ register(ModelSpec(
     key="sdxl-turbo", family="diffusion", repo_id="stabilityai/sdxl-turbo",
     engine="diffusers", pipeline_class="AutoPipelineForText2Image", task="text-to-image",
     steps=4, download_gib=7.0, resident_gib=8.5, license="sai-nc",
-    supports_lora=True,
+    supports_lora=True, extra={"variant": "fp16"},
 ))
 register(ModelSpec(
     key="qwen-image", family="diffusion", repo_id="Qwen/Qwen-Image",

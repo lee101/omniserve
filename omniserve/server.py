@@ -11,7 +11,14 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from . import backends  # noqa: F401
 from .catalog import MODEL_CATALOG, get_model, init_catalog_from_env
 from .loras import ensure_lora, load_lora_catalog
+from .priority import AdmissionTimeout, Tier
 from .scheduler import CapacityError, Scheduler
+
+
+def _tier(request: Request) -> Tier:
+    # Trusted internal header set by each property's gateway (which knows the
+    # caller's billing state). Absent header = FREE.
+    return Tier.parse(request.headers.get("x-omniserve-tier"))
 
 log = logging.getLogger("omniserve")
 
@@ -104,26 +111,26 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         if spec.family != "llm":
             raise HTTPException(400, f"'{key}' is a {spec.family} model")
         if body.get("stream"):
-            b = sched.ensure(key)
+            b = sched.ensure(key, _tier(request))
             return StreamingResponse(
                 b.proxy_stream("/v1/chat/completions", body),
                 media_type="text/event-stream",
             )
         body["_path"] = "/v1/chat/completions"
-        return _run(sched, key, body)
+        return _run(sched, key, body, _tier(request))
 
     @app.post("/v1/completions")
     async def completions(request: Request):
         body = await request.json()
         key = _resolve(body.get("model"), "llm")
         if body.get("stream"):
-            b = sched.ensure(key)
+            b = sched.ensure(key, _tier(request))
             return StreamingResponse(
                 b.proxy_stream("/v1/completions", body),
                 media_type="text/event-stream",
             )
         body["_path"] = "/v1/completions"
-        return _run(sched, key, body)
+        return _run(sched, key, body, _tier(request))
 
     @app.post("/v1/images/generations")
     async def images(request: Request):
@@ -145,7 +152,7 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
             "loras": _prepare_loras(body.get("loras")),
         }
         req = {k: v for k, v in req.items() if v is not None}
-        result = _run(sched, key, req)
+        result = _run(sched, key, req, _tier(request))
         return {
             "created": int(time.time()),
             "data": [{"b64_json": b} for b in result["images_b64"]],
@@ -166,7 +173,7 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
             "image_path": body.get("image_path"),
             "loras": _prepare_loras(body.get("loras")),
         }
-        result = _run(sched, key, req)
+        result = _run(sched, key, req, _tier(request))
         if body.get("raw"):
             return Response(base64.b64decode(result["video_b64"]), media_type="video/mp4")
         return {"created": int(time.time()), "data": [{"b64_json": result["video_b64"], "format": "mp4"}], "model": key}
@@ -175,13 +182,18 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
     def capacity_handler(_req, exc):
         return JSONResponse(status_code=507, content={"error": str(exc)})
 
+    @app.exception_handler(AdmissionTimeout)
+    def admission_handler(_req, exc):
+        return JSONResponse(status_code=503, content={"error": str(exc)},
+                            headers={"Retry-After": "30"})
+
     return app
 
 
-def _run(sched: Scheduler, key: str, req: dict) -> dict:
+def _run(sched: Scheduler, key: str, req: dict, tier: Tier = Tier.FREE) -> dict:
     try:
-        return sched.infer(key, req)
-    except CapacityError:
+        return sched.infer(key, req, tier)
+    except (CapacityError, AdmissionTimeout):
         raise
     except HTTPException:
         raise

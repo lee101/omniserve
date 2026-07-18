@@ -13,8 +13,12 @@ from omniserve.loras import ensure_lora
 from omniserve.scheduler import Scheduler
 
 
+import logging
+
+
 class Predictor(BasePredictor):
     def setup(self):
+        logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
         init_catalog_from_env()
         self.scheduler = Scheduler()
 

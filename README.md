@@ -7,7 +7,7 @@
 <p align="center"><b>The omni model server.</b> One GPU, every model family: diffusion, video, LoRA, LLM — auto-loaded, VRAM-balanced, OpenAI-compatible.</p>
 
 <p align="center">
-  <a href="https://app.nz/deploy?template=omniserve"><img src="assets/deploy-button.svg" alt="Deploy to app.nz"></a>
+  <a href="https://app.nz/deploy?image=ghcr.io/lee101/omniserve:latest&name=omniserve&hardware=gpu-rtx4090&minVramGb=24&idleSeconds=300"><img src="assets/deploy-button.svg" alt="Deploy to app.nz"></a>
 </p>
 
 Think AUTOMATIC1111's "serve everything" flexibility with a production server's discipline: a declarative model catalog, a VRAM-aware scheduler that loads/sleeps/evicts models on demand, hot-swappable LoRAs, tiered idle shutdown, and a fleet-friendly weight mirror — all behind OpenAI-compatible HTTP and packaged as a [Cog](https://github.com/replicate/cog) for one-click GPU deploys.
@@ -20,6 +20,7 @@ Replicate and fal give you one endpoint per model. ComfyUI/A1111 give you every 
 - **Balancing** — diffusion pipelines, an LTX video pipeline, and vLLM subprocesses coexist on one GPU. LLMs sleep (weights → pinned RAM, VRAM freed, wake in seconds) instead of dying; cold ones unload entirely.
 - **LoRA native** — any request can attach LoRAs by catalog id or https URL; adapters download once per fleet via the built-in peer mirror.
 - **OpenAI-compatible** — `/v1/chat/completions` (streaming), `/v1/completions`, `/v1/images/generations`, plus `/v1/video/generations` and admin/status routes.
+- **Priority tiers** — requests carry `X-Omniserve-Tier: paid | sub | free | background`. GPU slots are granted strictly by tier (FIFO within a tier); `background` runs only on an otherwise idle GPU. Eviction is tier-protected: a free request cannot evict a model a paid caller used in the last `OMNISERVE_TIER_PROTECT_S` (default 120s) — it gets a clean 507 to retry instead — while paid/sub always evict downward. Queue waits past `OMNISERVE_ADMISSION_TIMEOUT_S` return 503 + Retry-After. `/status` reports per-tier active/waiting/served counts.
 - **Weight mirror aware** — weights resolve local dir → your R2/HTTP mirror (parallel, range-resume) → Hugging Face.
 
 ## Quickstart
@@ -92,7 +93,7 @@ cog predict -i task=video -i prompt="waves at sunset" -i lora=<catalog-id-or-url
 
 ## Deploy on app.nz
 
-One click: [![Deploy to app.nz](assets/deploy-button.svg)](https://app.nz/deploy?template=omniserve) — scale-to-zero GPU hosting with per-second billing, or pick hardware: [H100](https://app.nz/deploy?template=omniserve&hardware=gpu-h100) / [A100](https://app.nz/deploy?template=omniserve&hardware=gpu-a100).
+One click: [![Deploy to app.nz](assets/deploy-button.svg)](https://app.nz/deploy?image=ghcr.io/lee101/omniserve:latest&name=omniserve&hardware=gpu-rtx4090&minVramGb=24&idleSeconds=300) — scale-to-zero GPU hosting with per-second billing. For LTX video pick an [H100](https://app.nz/deploy?image=ghcr.io/lee101/omniserve:latest&name=omniserve&hardware=gpu-h100&minVramGb=80&idleSeconds=300), or use the built-in [omniserve template](https://app.nz/deploy?template=omniserve).
 
 ## Env reference
 

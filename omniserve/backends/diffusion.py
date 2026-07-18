@@ -7,7 +7,7 @@ import logging
 import os
 
 from .base import Backend, register_engine
-from ..weights import resolve_weights
+from ..weights import hf_cache_dir, resolve_weights
 
 log = logging.getLogger("omniserve.diffusion")
 
@@ -47,18 +47,34 @@ class DiffusionBackend(Backend):
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-        path = resolve_weights(self.spec.repo_id, self.spec.single_file)
+        try:
+            src = str(resolve_weights(self.spec.repo_id, self.spec.single_file, allow_hf=False))
+        except FileNotFoundError:
+            src = self.spec.repo_id
         cls = getattr(diffusers, self.spec.pipeline_class, diffusers.DiffusionPipeline)
         kwargs: dict = {"torch_dtype": torch.bfloat16}
+        if src == self.spec.repo_id:
+            kwargs["cache_dir"] = str(hf_cache_dir())
+            if os.environ.get("HF_TOKEN"):
+                kwargs["token"] = os.environ["HF_TOKEN"]
         quant = os.environ.get("OMNISERVE_QUANT", self.spec.recommended_quant)
         qc = _quant_config(quant)
         if qc is not None:
             kwargs["quantization_config"] = qc
 
         if self.spec.loader == "single_file" or self.spec.single_file:
-            pipe = cls.from_single_file(str(path), **kwargs)
+            pipe = cls.from_single_file(src, **kwargs)
         else:
-            pipe = cls.from_pretrained(str(path), **kwargs)
+            variant = self.spec.extra.get("variant")
+            if variant:
+                kwargs["variant"] = variant
+            try:
+                pipe = cls.from_pretrained(src, **kwargs)
+            except (OSError, EnvironmentError):
+                if kwargs.get("variant"):
+                    raise
+                log.info("retrying %s with fp16 variant weights", self.spec.key)
+                pipe = cls.from_pretrained(src, variant="fp16", **kwargs)
 
         offload = os.environ.get("OMNISERVE_OFFLOAD", self.spec.recommended_offload)
         if offload == "model":
