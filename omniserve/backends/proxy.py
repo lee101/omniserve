@@ -56,11 +56,19 @@ class ProxyBackend(Backend):
         self._resident = float(extra.get("resident_gib", 0.0))
         self._evict_url = extra.get("evict_url", "")   # e.g. http://127.0.0.1:8100/admin/unload
         self._evict_method = (extra.get("evict_method") or "POST").upper()
+        # A GPU-backed upstream may hold VRAM from traffic that bypassed
+        # omniserve (direct hits to its port). So assume it's warm until we
+        # explicitly evict it — that makes it an eviction candidate immediately.
+        # The scheduler confirms against real free VRAM, so a wasted evict on an
+        # already-free upstream is harmless (idempotent POST, no state change).
+        if self._evict_url and self._resident > 0:
+            self.state = State.READY
 
     def resident_gib(self) -> float:
-        # Only counts while we believe the upstream is warm — so eviction
-        # candidate selection knows how much freeing us would recover.
-        return self._resident if self.state in (State.READY, State.LOADING) else 0.0
+        # Counts whenever we haven't explicitly evicted it — covers out-of-band
+        # residency. Eviction candidate selection uses this to know how much
+        # freeing us could recover; the real vram_free() is the source of truth.
+        return self._resident if self.state != State.UNLOADED else 0.0
 
     def load(self) -> None:
         # readiness = upstream reachable. Cheap HEAD/GET; tolerate 404 (up but
