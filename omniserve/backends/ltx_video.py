@@ -82,7 +82,7 @@ class LtxVideoBackend(Backend):
         height = int(request.get("height", 704)) // 64 * 64
         seed = request.get("seed")
 
-        loras = [(l["path"], float(l.get("scale", 1.0))) for l in request.get("loras") or []]
+        loras = [(lora["path"], float(lora.get("scale", 1.0))) for lora in request.get("loras") or []]
         self._apply_loras(loras)
 
         out = Path(tempfile.mkdtemp(prefix="omniserve-ltx-")) / "out.mp4"

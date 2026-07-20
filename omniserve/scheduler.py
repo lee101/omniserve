@@ -31,7 +31,7 @@ class Scheduler:
         start_reaper: bool = True,
         slots: int = int(os.environ.get("OMNISERVE_SLOTS", "1")),
         tier_protect_s: float = float(os.environ.get("OMNISERVE_TIER_PROTECT_S", "120")),
-        admission_timeout_s: float = float(os.environ.get("OMNISERVE_ADMISSION_TIMEOUT_S", "600")),
+        admission_timeout_s: float = float(os.environ.get("OMNISERVE_ADMISSION_TIMEOUT_S", "30")),
     ):
         self.backend_factory = backend_factory
         self.vram_free = vram_free
@@ -70,8 +70,13 @@ class Scheduler:
 
     def _evict_for(self, needed_gib: float, protect: str, tier: Tier = Tier.FREE) -> None:
         skipped = []
+        busy = []
+        for backend in self._resident():
+            if backend.spec.key != protect and backend.active_requests():
+                busy.append(backend.spec.key)
         candidates = sorted(
-            (b for b in self._resident() if b.spec.key != protect),
+            (b for b in self._resident()
+             if b.spec.key != protect and b.resident_gib() > 0 and not b.active_requests()),
             key=lambda b: b.last_used,
         )
         for b in candidates:
@@ -94,6 +99,13 @@ class Scheduler:
                 raise CapacityError(
                     f"{tier.name} request needs {needed_gib:.1f} GiB but higher-tier models "
                     f"{skipped} are protected; retry shortly")
+            if busy:
+                raise CapacityError(
+                    f"{tier.name} request needs {needed_gib:.1f} GiB but models {busy} "
+                    "are serving active requests; retry shortly")
+            raise CapacityError(
+                f"model needs {needed_gib:.1f} GiB but only {self.vram_free():.1f} GiB "
+                "is currently free (including headroom)")
 
     def ensure(self, key: str, tier: Tier = Tier.FREE) -> Backend:
         b = self._get(key)
@@ -111,8 +123,10 @@ class Scheduler:
                     b.wake()
                     b.state = State.READY
                 return b
-            needed = b.spec.resident_gib + self.headroom_gib
-            self._evict_for(needed, protect=key, tier=tier)
+            if b.spec.resident_gib > 0:
+                # zero-resident backends (proxy) hold no VRAM; skip preflight
+                needed = b.spec.resident_gib + self.headroom_gib
+                self._evict_for(needed, protect=key, tier=tier)
             log.info("loading %s (%.1f GiB, free %.1f GiB)", key, b.spec.resident_gib, self.vram_free())
             b.state = State.LOADING
             try:
@@ -139,11 +153,9 @@ class Scheduler:
 
     def infer(self, key: str, request: dict, tier: Tier = Tier.FREE) -> dict:
         with self.gate.slot(tier, timeout=self.admission_timeout_s):
-            b = self.ensure(key, tier)
+            b = self._pin(key, tier)
             try:
-                with b.lock:
-                    b.touch()
-                    result = b.infer(request)
+                result = self._infer_once(b, request)
                 b.touch()
                 return result
             except Exception:
@@ -151,27 +163,76 @@ class Scheduler:
                     log.warning("oom on %s, evicting others and retrying", key)
                     with self.swap_lock:
                         self._evict_for(b.spec.resident_gib + self.headroom_gib, protect=key, tier=tier)
-                    with b.lock:
-                        return b.infer(request)
+                    return self._infer_once(b, request)
                 raise
+            finally:
+                b.end_request()
+
+    def _pin(self, key: str, tier: Tier) -> Backend:
+        """Make a ready backend non-evictable before releasing swap_lock."""
+        with self.swap_lock:
+            b = self.ensure(key, tier)
+            b.begin_request()
+            return b
+
+    @staticmethod
+    def _infer_once(b: Backend, request: dict) -> dict:
+        if b.concurrent_requests:
+            return b.infer(request)
+        with b.lock:
+            return b.infer(request)
+
+    def stream(
+        self,
+        key: str,
+        path: str,
+        request: dict,
+        tier: Tier = Tier.FREE,
+        headers: dict | None = None,
+    ):
+        """Return an iterator that owns admission and residency for its lifetime."""
+        self.gate.acquire(tier, timeout=self.admission_timeout_s)
+        try:
+            b = self._pin(key, tier)
+            stream_fn = getattr(b, "proxy_stream")
+        except Exception:
+            self.gate.release(tier)
+            raise
+
+        def chunks():
+            try:
+                for chunk in stream_fn(path, request, headers=headers):
+                    b.touch()
+                    yield chunk
+            finally:
+                b.end_request()
+                self.gate.release(tier)
+
+        return chunks()
 
     def sleep(self, key: str) -> None:
         b = self.backends.get(key)
         if b and b.state == State.READY:
-            with self.swap_lock, b.lock:
-                if b.supports_sleep:
-                    b.sleep()
-                    b.state = State.SLEEPING
-                else:
-                    b.unload()
-                    b.state = State.UNLOADED
+            with self.swap_lock:
+                if b.active_requests():
+                    return
+                with b.lock:
+                    if b.supports_sleep:
+                        b.sleep()
+                        b.state = State.SLEEPING
+                    else:
+                        b.unload()
+                        b.state = State.UNLOADED
 
     def stop(self, key: str) -> None:
         b = self.backends.get(key)
         if b and b.state != State.UNLOADED:
-            with self.swap_lock, b.lock:
-                b.unload()
-                b.state = State.UNLOADED
+            with self.swap_lock:
+                if b.active_requests():
+                    return
+                with b.lock:
+                    b.unload()
+                    b.state = State.UNLOADED
 
     def status(self) -> dict:
         return {

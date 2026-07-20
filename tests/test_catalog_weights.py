@@ -1,6 +1,6 @@
 import json
 
-from omniserve.catalog import MODEL_CATALOG, ModelSpec, get_model, load_extra_catalog, models_for_family
+from omniserve.catalog import MODEL_CATALOG, get_model, load_extra_catalog, models_for_family
 from omniserve.weights import resolve_weights, weights_dir
 
 

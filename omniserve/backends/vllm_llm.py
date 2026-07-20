@@ -23,6 +23,7 @@ def _port_free(port: int) -> bool:
 @register_engine("vllm")
 class VllmBackend(Backend):
     supports_sleep = True
+    concurrent_requests = True
 
     def __init__(self, spec):
         super().__init__(spec)
@@ -117,15 +118,16 @@ class VllmBackend(Backend):
         path = request.get("_path", "/v1/chat/completions")
         payload = {k: v for k, v in request.items() if not k.startswith("_")}
         payload["model"] = self.spec.repo_id
-        r = self._client.post(path, json=payload)
+        r = self._client.post(path, json=payload, headers=request.get("_headers") or {})
         r.raise_for_status()
         return r.json()
 
-    def proxy_stream(self, path: str, payload: dict):
+    def proxy_stream(self, path: str, payload: dict, headers: dict | None = None):
         payload = dict(payload)
         payload["model"] = self.spec.repo_id
         payload["stream"] = True
-        with self._client.stream("POST", path, json=payload) as r:
+        with self._client.stream("POST", path, json=payload, headers=headers or {}) as r:
+            r.raise_for_status()
             for line in r.iter_lines():
                 if line:
                     yield line + "\n\n"

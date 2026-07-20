@@ -19,8 +19,9 @@ Replicate and fal give you one endpoint per model. ComfyUI/A1111 give you every 
 - **Auto-loading** — first request for a model loads it; the scheduler evicts least-recently-used models when VRAM runs short, with capacity preflight before any download.
 - **Balancing** — diffusion pipelines, an LTX video pipeline, and vLLM subprocesses coexist on one GPU. LLMs sleep (weights → pinned RAM, VRAM freed, wake in seconds) instead of dying; cold ones unload entirely.
 - **LoRA native** — any request can attach LoRAs by catalog id or https URL; adapters download once per fleet via the built-in peer mirror.
-- **OpenAI-compatible** — `/v1/chat/completions` (streaming), `/v1/completions`, `/v1/images/generations`, plus `/v1/video/generations` and admin/status routes.
+- **OpenAI-compatible** — `/v1/chat/completions` (streaming), `/v1/completions`, `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`, plus video and admin/status routes. The text-generator.io `/api/v1/generate` path is also relayed.
 - **Priority tiers** — requests carry `X-Omniserve-Tier: paid | sub | free | background`. GPU slots are granted strictly by tier (FIFO within a tier); `background` runs only on an otherwise idle GPU. Eviction is tier-protected: a free request cannot evict a model a paid caller used in the last `OMNISERVE_TIER_PROTECT_S` (default 120s) — it gets a clean 507 to retry instead — while paid/sub always evict downward. Queue waits past `OMNISERVE_ADMISSION_TIMEOUT_S` return 503 + Retry-After. `/status` reports per-tier active/waiting/served counts.
+- **Stream-safe residency** — a streaming request keeps its admission slot and pins its backend until completion or disconnect. Proxy/vLLM backends still accept concurrent requests for continuous batching; in-process diffusion pipelines remain serialized.
 - **Weight mirror aware** — weights resolve local dir → your R2/HTTP mirror (parallel, range-resume) → Hugging Face.
 
 ## Quickstart
@@ -63,6 +64,8 @@ class MyBackend(Backend):
     def infer(self, request: dict) -> dict: ...
 ```
 
+Use `engine: "proxy"` (or the `OMNISERVE_PROXY_PROXY_LLM`, `_IMAGE`, `_TTS`, and `_STT` environment variables) to put existing workers behind the same scheduler without loading duplicate weights. JSON, SSE, binary audio/image responses, auth headers, and multipart STT bodies are preserved at the proxy boundary.
+
 ## Scheduling model
 
 | state | VRAM | wake cost | trigger |
@@ -102,6 +105,8 @@ One click: [![Deploy to app.nz](assets/deploy-button.svg)](https://app.nz/deploy
 | `OMNISERVE_CATALOG` | — | extra models JSON |
 | `OMNISERVE_HEADROOM_GIB` | 2 | VRAM kept free above model estimate |
 | `OMNISERVE_IDLE_SLEEP_S` / `OMNISERVE_IDLE_UNLOAD_S` | 300 / 3600 | idle tiers |
+| `OMNISERVE_SLOTS` / `OMNISERVE_ADMISSION_TIMEOUT_S` | 1 / 30 | concurrent admission slots / maximum queue wait |
+| `OMNISERVE_PROXY_PROXY_LLM` / `_IMAGE` / `_TTS` / `_STT` | — | existing modality worker base URLs |
 | `OMNISERVE_QUANT` | per-model | `torchao-fp8dq`, `torchao-int8wo`, `fp8-scaled-mm`, … |
 | `OMNISERVE_OFFLOAD` | per-model | `cuda`, `model`, `sequential` |
 | `OMNISERVE_COMPILE` | off | torch.compile mode for the denoiser |

@@ -106,7 +106,7 @@ class DiffusionBackend(Backend):
             pass
 
     def _apply_loras(self, loras: list[dict]) -> None:
-        key = tuple((l["path"], float(l.get("scale", 1.0))) for l in loras)
+        key = tuple((lora["path"], float(lora.get("scale", 1.0))) for lora in loras)
         if key == self.active_loras:
             return
         if self.active_loras:

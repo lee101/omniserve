@@ -43,9 +43,9 @@ class AdmissionTimeout(RuntimeError):
 class PriorityGate:
     """Counting semaphore whose waiters are served in tier order.
 
-    slots: concurrent GPU requests admitted (heavy pipelines want 1-2; vLLM
-    handles its own internal concurrency so its streaming path only holds a
-    slot during ensure/load).
+    slots: concurrent GPU requests admitted. A streamed request keeps its slot
+    until the client disconnects or the upstream finishes, so the scheduler
+    cannot start a conflicting diffusion/model swap behind an active stream.
     """
 
     def __init__(self, slots: int = 1):

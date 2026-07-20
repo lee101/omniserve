@@ -3,7 +3,7 @@ import time
 import pytest
 
 from omniserve.backends.base import Backend, State
-from omniserve.catalog import ModelSpec, register
+from omniserve.catalog import ModelSpec, get_model, register
 from omniserve.priority import Tier
 from omniserve.scheduler import CapacityError, Scheduler
 
@@ -89,3 +89,27 @@ def test_status_reports_tiers_and_admission(sched):
     assert st["admission"]["served"]["paid"] == 1
     tiers = {b["model"]: b["tier"] for b in st["backends"]}
     assert tiers["tier-paid-model"] == "paid"
+
+
+class ZeroResidentBackend(FakeBackend):
+    def load(self):
+        pass
+
+    def unload(self):
+        pass
+
+    def resident_gib(self):
+        return 0.0
+
+
+def test_zero_resident_proxy_never_blocks_eviction(sched):
+    gpu = sched._test_gpu
+    register(ModelSpec(key="tier-proxy-model", family="tts", repo_id="t/proxy", engine="fake", resident_gib=0.0))
+    sched.backends["tier-proxy-model"] = ZeroResidentBackend(get_model("tier-proxy-model"), gpu)
+    sched.infer("tier-proxy-model", {}, Tier.PAID)
+    # Leave enough real capacity for the requested model; the zero-resident
+    # proxy must neither consume nor be chosen as an eviction candidate.
+    gpu.used = 11.0
+    sched.infer("tier-free-model", {}, Tier.BACKGROUND)
+    assert sched.backends["tier-proxy-model"].state == State.READY
+    assert sched.backends["tier-free-model"].state == State.READY

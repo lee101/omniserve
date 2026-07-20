@@ -90,6 +90,7 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         ]}
 
     @app.get("/status")
+    @app.get("/backend_status")
     def status():
         return sched.status()
 
@@ -120,12 +121,13 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         if spec.family != "llm":
             raise HTTPException(400, f"'{key}' is a {spec.family} model")
         if body.get("stream"):
-            b = sched.ensure(key, _tier(request))
             return StreamingResponse(
-                b.proxy_stream("/v1/chat/completions", body),
+                sched.stream(key, "/v1/chat/completions", body, _tier(request),
+                             headers=_fwd_headers(request)),
                 media_type="text/event-stream",
             )
         body["_path"] = "/v1/chat/completions"
+        body["_headers"] = _fwd_headers(request)
         return _run(sched, key, body, _tier(request))
 
     @app.post("/v1/completions")
@@ -133,18 +135,37 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         body = await request.json()
         key = _resolve(body.get("model"), "llm")
         if body.get("stream"):
-            b = sched.ensure(key, _tier(request))
             return StreamingResponse(
-                b.proxy_stream("/v1/completions", body),
+                sched.stream(key, "/v1/completions", body, _tier(request),
+                             headers=_fwd_headers(request)),
                 media_type="text/event-stream",
             )
         body["_path"] = "/v1/completions"
+        body["_headers"] = _fwd_headers(request)
+        return _run(sched, key, body, _tier(request))
+
+    @app.post("/api/v1/generate")
+    async def legacy_generate(request: Request):
+        """Pass through the text-generator.io legacy generation contract."""
+        body = await request.json()
+        key = _resolve(body.get("model"), "llm")
+        body["_path"] = "/api/v1/generate"
+        body["_headers"] = _fwd_headers(request)
         return _run(sched, key, body, _tier(request))
 
     @app.post("/v1/images/generations")
     async def images(request: Request):
         body = await request.json()
         key = _resolve(body.get("model"), "diffusion")
+        spec = get_model(key)
+        if spec.engine == "proxy":
+            body["_path"] = "/v1/images/generations"
+            body["_headers"] = _fwd_headers(request)
+            result = _run(sched, key, body, _tier(request))
+            raw = result.get("_raw")
+            if raw is not None:
+                return Response(raw, media_type=result.get("_content_type", "image/webp"))
+            return result
         size = body.get("size", "1024x1024")
         try:
             w, h = (int(x) for x in size.lower().split("x"))
@@ -172,6 +193,15 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
     async def video(request: Request):
         body = await request.json()
         key = _resolve(body.get("model"), "video")
+        spec = get_model(key)
+        if spec.engine == "proxy":
+            body["_path"] = "/v1/video/generations"
+            body["_headers"] = _fwd_headers(request)
+            result = _run(sched, key, body, _tier(request))
+            raw = result.get("_raw")
+            if raw is not None:
+                return Response(raw, media_type=result.get("_content_type", "video/mp4"))
+            return result
         req = {
             "prompt": body.get("prompt", ""),
             "num_frames": body.get("num_frames", 121),
@@ -188,6 +218,7 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         return {"created": int(time.time()), "data": [{"b64_json": result["video_b64"], "format": "mp4"}], "model": key}
 
     @app.post("/v1/audio/speech")
+    @app.post("/api/v1/generate_speech")
     async def audio_speech(request: Request):
         body = await request.json()
         key = _resolve(body.get("model"), "tts")
@@ -201,6 +232,7 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         return result
 
     @app.post("/v1/audio/transcriptions")
+    @app.post("/api/v1/audio/transcribe")
     async def audio_transcriptions(request: Request):
         # multipart (file upload) OR json {audio_url}. Proxy passes the body
         # through to the STT upstream; tier from header.
@@ -211,6 +243,7 @@ def create_app(scheduler: Scheduler | None = None) -> FastAPI:
         else:
             body = {"_raw_body": await request.body(), "_content_type": ctype}
         body["_path"] = "/v1/audio/transcriptions"
+        body["_headers"] = _fwd_headers(request)
         result = _run(sched, key, body, _tier(request))
         raw = result.get("_raw")
         if raw is not None:

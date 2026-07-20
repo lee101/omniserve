@@ -1,0 +1,25 @@
+[Unit]
+Description=omniserve model scheduler (port 8790)
+After=network.target
+
+[Service]
+Type=simple
+User=administrator
+WorkingDirectory=/nvme0n1-disk/code/omniserve
+ExecStart=/bin/bash -c '\
+[ -f "$HOME/.secretbashrc" ] && . "$HOME/.secretbashrc"; \
+exec env \
+    TMPDIR=/nvme0n1-disk/tmp \
+    HF_HOME=/vfast/data/.cache/huggingface \
+    OMNISERVE_PROXY_PROXY_IMAGE=http://127.0.0.1:8100 \
+    OMNISERVE_PROXY_PROXY_LLM=http://127.0.0.1:8300 \
+    OMNISERVE_PROXY_PROXY_TTS=http://127.0.0.1:9080 \
+    OMNISERVE_DEFAULT_DIFFUSION=proxy-image \
+    OMNISERVE_DEFAULT_LLM=proxy-llm \
+    /nvme0n1-disk/code/text-generator.io/.venv/bin/python -m uvicorn \
+    omniserve.server:create_app --factory --host 127.0.0.1 --port 8790'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

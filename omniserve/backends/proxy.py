@@ -38,6 +38,7 @@ def _base_url_for(spec: ModelSpec) -> str:
 @register_engine("proxy")
 class ProxyBackend(Backend):
     supports_sleep = False  # nothing local to sleep; upstream owns residency
+    concurrent_requests = True
 
     def __init__(self, spec: ModelSpec):
         super().__init__(spec)
@@ -71,21 +72,37 @@ class ProxyBackend(Backend):
 
     def infer(self, request: dict) -> dict:
         path, payload = self._payload(request)
-        headers = request.get("_headers") or {}
-        r = self._client.post(path, json=payload, headers=headers)
-        r.raise_for_status()
+        headers = dict(request.get("_headers") or {})
+        raw_body = request.get("_raw_body")
+        if raw_body is not None:
+            content_type = request.get("_content_type")
+            if content_type:
+                headers["content-type"] = content_type
+            r = self._client.post(path, content=raw_body, headers=headers)
+        else:
+            r = self._client.post(path, json=payload, headers=headers)
+        if r.status_code >= 400:
+            # surface the upstream status (401/403/422/...) instead of a 500
+            from fastapi import HTTPException
+            detail: object = r.text[:500]
+            try:
+                detail = r.json().get("detail", detail)
+            except Exception:
+                pass
+            raise HTTPException(r.status_code, detail)
         ct = r.headers.get("content-type", "")
         if ct.startswith("application/json"):
             return r.json()
         # binary modality (audio/image bytes): wrap so the server can pass through
         return {"_raw": r.content, "_content_type": ct}
 
-    def proxy_stream(self, path: str, payload: dict):
+    def proxy_stream(self, path: str, payload: dict, headers: dict | None = None):
         payload = dict(payload)
         if self._model_override:
             payload["model"] = self._model_override
         payload["stream"] = True
-        with self._client.stream("POST", path, json=payload) as r:
+        with self._client.stream("POST", path, json=payload, headers=headers or {}) as r:
+            r.raise_for_status()
             for line in r.iter_lines():
                 if line:
                     yield line + "\n\n"

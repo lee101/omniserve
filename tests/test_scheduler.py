@@ -49,6 +49,10 @@ class FakeBackend(Backend):
     def infer(self, request):
         return {"echo": request, "model": self.spec.key}
 
+    def proxy_stream(self, path, request, headers=None):
+        yield f"data: {path}\n\n"
+        yield "data: done\n\n"
+
 
 @pytest.fixture
 def sched():
@@ -131,6 +135,34 @@ def test_concurrent_ensure_single_load(sched):
     [t.join() for t in threads]
     assert not errs
     assert sched.backends["small-a"].loads == 1
+
+
+def test_stream_holds_admission_and_residency_until_closed(sched):
+    stream = sched.stream("small-a", "/v1/chat/completions", {}, headers={})
+    backend = sched.backends["small-a"]
+    assert sched.gate.stats()["active"] == 1
+    assert backend.active_requests() == 1
+    assert next(stream).startswith("data:")
+    stream.close()
+    assert sched.gate.stats()["active"] == 0
+    assert backend.active_requests() == 0
+
+
+def test_active_backend_is_not_evicted():
+    gpu = FakeGpu()
+    register(ModelSpec(key="busy-small", family="test", repo_id="t/busy", engine="fake", resident_gib=8.0))
+    register(ModelSpec(key="busy-big", family="test", repo_id="t/big", engine="fake", resident_gib=20.0))
+    s = Scheduler(
+        backend_factory=lambda spec: FakeBackend(spec, gpu),
+        vram_free=gpu.free, vram_total=lambda: gpu.total,
+        headroom_gib=2.0, start_reaper=False, slots=2,
+    )
+    stream = s.stream("busy-small", "/v1/chat/completions", {})
+    next(stream)
+    with pytest.raises(CapacityError, match="active requests"):
+        s.ensure("busy-big")
+    assert s.backends["busy-small"].state == State.READY
+    stream.close()
 
 
 def test_reaper_tiers():
