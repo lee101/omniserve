@@ -47,9 +47,20 @@ class ProxyBackend(Backend):
         self._model_override = extra.get("model_override")
         self._timeout = float(extra.get("timeout", 600))
         self._client = httpx.Client(base_url=self._base, timeout=self._timeout)
+        # A GPU-backed upstream (image server, vLLM) can be arbitrated for VRAM:
+        # declare how much it holds and how to make it release. Then this proxy
+        # participates in the scheduler's tier-protected eviction, so a paid
+        # request (any modality) can push a lower-tier upstream out of VRAM.
+        # CPU/remote upstreams (TTS, Gemini STT) leave resident_gib at 0 and
+        # never take part.
+        self._resident = float(extra.get("resident_gib", 0.0))
+        self._evict_url = extra.get("evict_url", "")   # e.g. http://127.0.0.1:8100/admin/unload
+        self._evict_method = (extra.get("evict_method") or "POST").upper()
 
     def resident_gib(self) -> float:
-        return 0.0  # upstream holds the weights, not us
+        # Only counts while we believe the upstream is warm — so eviction
+        # candidate selection knows how much freeing us would recover.
+        return self._resident if self.state in (State.READY, State.LOADING) else 0.0
 
     def load(self) -> None:
         # readiness = upstream reachable. Cheap HEAD/GET; tolerate 404 (up but
@@ -58,6 +69,18 @@ class ProxyBackend(Backend):
             self._client.get("/health")
         except httpx.HTTPError:
             pass  # some upstreams have no /health; the first real call will surface errors
+        self.state = State.READY
+
+    def unload(self) -> None:
+        # For a VRAM-holding upstream, "unload" means ask it to release VRAM
+        # (the actual free is confirmed by the scheduler's real vram_free()).
+        # For a plain proxy this is a no-op.
+        if self._evict_url and self._resident > 0:
+            try:
+                self._client.request(self._evict_method, self._evict_url, timeout=60)
+            except httpx.HTTPError:
+                pass  # best-effort; scheduler re-checks real free VRAM after
+        self.state = State.UNLOADED
         self.state = State.READY
 
     def unload(self) -> None:

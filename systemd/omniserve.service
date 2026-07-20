@@ -12,8 +12,14 @@ exec env \
     TMPDIR=/nvme0n1-disk/tmp \
     HF_HOME=/vfast/data/.cache/huggingface \
     OMNISERVE_PROXY_PROXY_IMAGE=http://127.0.0.1:8100 \
+    OMNISERVE_PROXY_PROXY_IMAGE_RESIDENT_GIB=15 \
+    OMNISERVE_PROXY_PROXY_IMAGE_EVICT_URL=http://127.0.0.1:8100/admin/unload \
     OMNISERVE_PROXY_PROXY_LLM=http://127.0.0.1:8300 \
+    OMNISERVE_PROXY_PROXY_LLM_RESIDENT_GIB=13 \
+    OMNISERVE_PROXY_PROXY_LLM_EVICT_URL=http://127.0.0.1:8300/backend/sleep \
     OMNISERVE_PROXY_PROXY_TTS=http://127.0.0.1:9080 \
+    OMNISERVE_HEADROOM_GIB=3 \
+    OMNISERVE_TIER_PROTECT_S=90 \
     OMNISERVE_DEFAULT_DIFFUSION=proxy-image \
     OMNISERVE_DEFAULT_LLM=proxy-llm \
     /nvme0n1-disk/code/text-generator.io/.venv/bin/python -m uvicorn \

@@ -110,11 +110,18 @@ def register_proxy_defaults() -> None:
         base = os.environ.get(env_key)
         if not base:
             continue
+        # GPU-backed upstreams (image, llm) can declare their VRAM footprint +
+        # a release endpoint via OMNISERVE_PROXY_<KEY>_RESIDENT_GIB / _EVICT_URL,
+        # so a higher-tier request can push them out of VRAM (tier arbitration).
+        resident = float(os.environ.get(env_key + "_RESIDENT_GIB", "0") or 0)
         register(ModelSpec(
             key=key, family=family, repo_id=key, engine="proxy", task=task,
-            resident_gib=0.0,
+            resident_gib=resident,
             extra={"base_url": base,
-                   "model_override": os.environ.get(env_key + "_MODEL", "")},
+                   "model_override": os.environ.get(env_key + "_MODEL", ""),
+                   "resident_gib": resident,
+                   "evict_url": os.environ.get(env_key + "_EVICT_URL", ""),
+                   "evict_method": os.environ.get(env_key + "_EVICT_METHOD", "POST")},
         ))
 
 
